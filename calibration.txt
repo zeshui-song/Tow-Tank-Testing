@@ -1,0 +1,16 @@
+{
+    "timestamp": "2026-08-23 14:20:20",
+    "gravity_used": 9.80665,
+    "lift_tare_bits": 3263686.5633333335,
+    "lift_loaded_bits": 2634482.6566666667,
+    "lift_calibration_mass_g": 45.06,
+    "lift_calibration_weight_N": 0.441887649,
+    "lift_scale_factor_N": -7.02296416659248e-07,
+    "lift_scale_factor_g": -7.161430423837376e-05,
+    "drag_tare_bits": 57849.60666666667,
+    "drag_loaded_bits": 649414.0366666666,
+    "drag_calibration_mass_g": 45.06,
+    "drag_calibration_weight_N": 0.441887649,
+    "drag_scale_factor_N": 7.46981438691302e-07,
+    "drag_scale_factor_g": 7.617090838270991e-05
+}

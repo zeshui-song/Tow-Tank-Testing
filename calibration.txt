@@ -12,5 +12,7 @@
     "drag_calibration_mass_g": 45.06,
     "drag_calibration_weight_N": 0.441887649,
     "drag_scale_factor_N": 7.46981438691302e-07,
-    "drag_scale_factor_g": 7.617090838270991e-05
+    "drag_scale_factor_g": 7.617090838270991e-05,
+    "grbl_port": "COM8",
+    "loadcell_port": "COM9"
 }

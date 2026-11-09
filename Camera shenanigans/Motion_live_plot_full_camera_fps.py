@@ -1,3 +1,4 @@
+
 from collections import deque
 from datetime import datetime
 import cv2
@@ -18,38 +19,29 @@ WORKING_DIR = r"C:\Users\zsong\Desktop\Tow Tank Testing"
 GCODE_FILE_PATH = os.path.join(WORKING_DIR, "Test Gcode.txt")
 CALIBRATION_FILE_PATH = os.path.join(WORKING_DIR, "calibration.txt")
 
-# Maximum number of points shown on the live scrolling window (300 pts @ 10Hz = ~30s)
 BUFFER_SIZE = 300
-SAMPLING_INTERVAL = 0.1   # 100ms = ~10 Hz
-TARE_SAMPLE_COUNT = 300   # 30s tare baseline (300 samples @ 10 Hz)
+SAMPLING_INTERVAL = 0.1
+TARE_SAMPLE_COUNT = 300
 
 CAMERA_INDEX = 1
 CAMERA_WIDTH, CAMERA_HEIGHT = 1280, 800
-CAMERA_FPS = 120              # Requested camera capture rate
-PREVIEW_FPS = 10             # Matplotlib plot/preview refresh rate
+CAMERA_FPS = 120
+PREVIEW_FPS = 10
 PRE_ROLL_SECONDS = 1.0
 POST_ROLL_SECONDS = 5.0
-MOVE_THRESHOLD_PX = 2.5      # ID 3 displacement over ~0.3 s
+MOVE_THRESHOLD_PX = 2.5
 VIDEO_DIR = os.path.join(WORKING_DIR, "Recordings")
 
 
-
 def probe_serial_device(port, baudrate=BAUD_RATE):
-    """Identify firmware over serial only. Return GRBL, LOADCELL, or None.
-
-    Allow the USB serial reset/startup delay, then actively request an ID.
-    Both cached verification and full discovery use the same handshake.
-    """
+    """Identify firmware over serial. Return GRBL, LOADCELL, or None."""
     grbl_pattern = re.compile(
         r"<(?:Idle|Run|Hold|Jog|Alarm|Door|Check|Home|Sleep)(?:[|,>:])", re.I
     )
     with serial.Serial(port, baudrate, timeout=0.15, write_timeout=0.5) as ser:
-        # Opening an Uno or Mega serial port may reset the board.
         time.sleep(2.0)
         ser.reset_input_buffer()
 
-        # Send both read-only requests. Grbl recognizes '?' but not IDENTIFY?,
-        # so identify Grbl first and do not send IDENTIFY? to it.
         for attempt in range(2):
             ser.write(b"?")
             ser.flush()
@@ -61,7 +53,6 @@ def probe_serial_device(port, baudrate=BAUD_RATE):
                 if "DEVICE:LOADCELL" in line:
                     return "LOADCELL"
 
-            # The load-cell sketch replies to this message; Grbl doesn't.
             ser.write(b"IDENTIFY?\n")
             ser.flush()
             deadline = time.monotonic() + 0.9
@@ -75,7 +66,7 @@ def probe_serial_device(port, baudrate=BAUD_RATE):
 
 
 def identify_saved_port(port, expected, baudrate=BAUD_RATE):
-    """Check a saved port using the SAME serial handshake as discovery."""
+    """Check a saved port using the same serial handshake as discovery."""
     try:
         actual = probe_serial_device(port, baudrate)
     except (serial.SerialException, OSError) as exc:
@@ -89,7 +80,7 @@ def identify_saved_port(port, expected, baudrate=BAUD_RATE):
 
 
 def get_arduino_ports(calibration_path=CALIBRATION_FILE_PATH):
-    """Reuse verified cached COM assignments; rediscover and save only on a cache miss."""
+    """Reuse verified cached COM assignments; rediscover on a cache miss."""
     calibration = {}
     if os.path.isfile(calibration_path):
         with open(calibration_path, 'r', encoding='utf-8') as f:
@@ -114,8 +105,6 @@ def get_arduino_ports(calibration_path=CALIBRATION_FILE_PATH):
     calibration["grbl_port"] = grbl_port
     calibration["loadcell_port"] = loadcell_port
 
-    # Replace the JSON file as a whole: plain text appended after JSON would
-    # break the existing json.load() calibration reader.
     tmp_path = calibration_path + ".tmp"
     try:
         with open(tmp_path, 'w', encoding='utf-8') as f:
@@ -171,10 +160,8 @@ def discover_arduino_ports(baudrate=BAUD_RATE):
     return devices["GRBL"], devices["LOADCELL"]
 
 
-
-
 def measure_live_tare(ser, sample_count=TARE_SAMPLE_COUNT):
-    """Measures a 30s baseline to calculate zero-offset in raw bits."""
+    """Measures a baseline to calculate zero-offset in raw bits."""
     print("\n" + "=" * 75)
     print(f"TARE MEASUREMENT ({sample_count * SAMPLING_INTERVAL:.0f}s)")
     print("=" * 75)
@@ -240,7 +227,6 @@ class LoadCellReader(threading.Thread):
                                     raw_drag = float(drag_str)
                                     raw_lift = float(lift_str)
 
-                                    # Tare subtraction only (raw bits)
                                     tared_drag = raw_drag - self.drag_tare
                                     tared_lift = raw_lift - self.lift_tare
 
@@ -265,7 +251,7 @@ class LoadCellReader(threading.Thread):
 
 
 class MotionTracker:
-    """Tracks position and signed directional velocity (+ forward, - backward) reported by Grbl."""
+    """Tracks position and signed directional velocity reported by Grbl."""
     def __init__(self, maxlen=300):
         self.times = deque(maxlen=maxlen)
         self.pos_vals = deque(maxlen=maxlen)
@@ -327,7 +313,7 @@ class GrblController:
             return " | ".join(responses)
 
     def query_status(self):
-        """Polls Grbl with '?' and parses coordinates and programmed/real-time feed rate."""
+        """Poll Grbl for coordinates and reported feed rate."""
         if not self.ser or not self.ser.is_open:
             return None, None, None
 
@@ -357,7 +343,6 @@ class GrblController:
                 except ValueError:
                     pass
 
-            # Grbl v1.1 reports feed/spindle as |FS:feed,spindle| (feed in mm/min)
             fs_match = re.search(r'\|FS:([-\d.]+),', resp)
             if fs_match:
                 try:
@@ -366,7 +351,6 @@ class GrblController:
                 except ValueError:
                     pass
 
-            # Grbl v0.9 reports |F:feed|
             if feed_rate_mm_s is None:
                 f_match = re.search(r'\|F:([-\d.]+)', resp)
                 if f_match:
@@ -435,7 +419,7 @@ def load_gcode_file(filepath):
 
 
 def grbl_poller(grbl, motion_tracker, shared_state):
-    """Continuously queries Grbl status at ~20Hz to sample position and signed directional velocity."""
+    """Continuously query Grbl for position and signed velocity."""
     last_x = 0.0
     last_time = time.time()
     last_sign = 1.0
@@ -449,14 +433,12 @@ def grbl_poller(grbl, motion_tracker, shared_state):
             dt = current_wall_time - last_time
             dx = pos_x - last_x
 
-            # Determine sign direction (+ forward, - backward)
             if abs(dx) > 0.005:
                 direction = 1.0 if dx > 0 else -1.0
                 last_sign = direction
             else:
                 direction = last_sign
 
-            # Use hardware reported feed rate with sign, fallback to numerical diff dx/dt
             if feed_mm_s is not None:
                 signed_velocity = direction * feed_mm_s if abs(dx) > 0.001 else 0.0
             else:
@@ -472,7 +454,7 @@ def grbl_poller(grbl, motion_tracker, shared_state):
 
 
 def grbl_worker(grbl, commands):
-    """Streams G-code sequence to Grbl."""
+    """Stream G-code sequence to Grbl."""
     try:
         for idx, cmd in enumerate(commands, start=1):
             print(f"[{idx}/{len(commands)}] >>> G-CODE: {cmd}")
@@ -484,13 +466,8 @@ def grbl_worker(grbl, commands):
         print(f"[Grbl Worker Error] {e}")
 
 
-
 class CameraTracker(threading.Thread):
-    """Detect markers at camera speed, independently of the 10 FPS plot preview.
-
-    The recording contains every frame Python successfully acquires. The graph
-    portion reuses its most recent 10 FPS rendering.
-    """
+    """Track ArUco markers and record video independently of plot preview."""
     def __init__(self):
         super().__init__(daemon=True)
         self.running = True
@@ -499,8 +476,13 @@ class CameraTracker(threading.Thread):
         self.latest_position = None
         self.latest_time = None
         self.latest_plot = np.full((800, 600, 3), 255, dtype=np.uint8)
+
         self.samples = {i: [] for i in (0, 1, 2)}
         self.fixed = {}
+
+        # Motion cannot begin until all three fixed markers are locked.
+        self.markers_ready = threading.Event()
+
         self.prebuffer = deque()
         self.motion_history = deque()
         self.writer = None
@@ -514,14 +496,12 @@ class CameraTracker(threading.Thread):
         self.trigger_armed = True
 
     def set_plot(self, rgb_plot):
-        # Called from the Matplotlib thread, approximately 10 times per second.
         with self.lock:
             self.latest_plot = cv2.cvtColor(
                 cv2.resize(rgb_plot, (600, 800)), cv2.COLOR_RGB2BGR
             )
 
     def compose(self, camera_bgr, plot_bgr):
-        # Output 1600x800. Keep the camera aspect ratio; do not stretch it.
         h, w = camera_bgr.shape[:2]
         resized_h = round(1000 * h / w)
         resized = cv2.resize(camera_bgr, (1000, resized_h))
@@ -532,7 +512,6 @@ class CameraTracker(threading.Thread):
         return canvas
 
     def motion_detected(self, pos, now):
-        # Detect motion directly from captured camera frames, not plot refreshes.
         if pos is None:
             return False
         self.motion_history.append((now, np.asarray(pos).copy()))
@@ -546,8 +525,6 @@ class CameraTracker(threading.Thread):
     def write_video_frame(self, image, timestamp):
         if self.writer is None:
             return
-        # Constant-FPS MP4: write each acquired frame once. If camera capture
-        # varies significantly, playback timing is only approximate.
         self.writer.write(image)
         self.written_frames += 1
 
@@ -556,12 +533,12 @@ class CameraTracker(threading.Thread):
         self.video_path = os.path.join(
             VIDEO_DIR, datetime.now().strftime('tow_tank_%Y%m%d_%H%M%S.mp4')
         )
-        # Use observed camera capture rate, never the preview frame rate.
         if len(self.capture_times) > 10:
             duration = self.capture_times[-1] - self.capture_times[0]
             measured = (len(self.capture_times) - 1) / duration if duration > 0 else 30
         else:
             measured = 30
+
         self.output_fps = max(1, min(120, round(measured)))
         self.writer = cv2.VideoWriter(
             self.video_path, cv2.VideoWriter_fourcc(*'mp4v'),
@@ -571,12 +548,15 @@ class CameraTracker(threading.Thread):
             self.writer = None
             print('[Video] Cannot open MP4 writer')
             return
+
         print(f'[Video] Recording at {self.output_fps} FPS (measured camera capture rate)')
         print(f'[Video] Started: {self.video_path}')
+
         for ts, jpg, plot in self.prebuffer:
             previous_camera = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
             if previous_camera is not None:
                 self.write_video_frame(self.compose(previous_camera, plot), ts)
+
         self.prebuffer.clear()
         self.last_motion = now
         self.trigger_armed = False
@@ -594,11 +574,14 @@ class CameraTracker(threading.Thread):
         cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
         if not cap.isOpened():
             print('[Camera] Cannot open camera 1.')
+            self.running = False
             return
+
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
+
         print('[Camera] Reported mode:',
               cap.get(cv2.CAP_PROP_FRAME_WIDTH), 'x', cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
               'at', cap.get(cv2.CAP_PROP_FPS), 'FPS (requested', CAMERA_FPS, ')')
@@ -619,33 +602,48 @@ class CameraTracker(threading.Thread):
                 if not ok:
                     print('[Camera] Frame read failed')
                     break
+
                 now = time.monotonic()
                 self.capture_times.append(now)
+
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
                 display = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame.copy()
+
                 corners, ids, _ = detector.detectMarkers(gray)
                 moving_position = None
+
                 if ids is not None:
                     for pts, mid in zip(corners, ids.flatten()):
                         mid = int(mid)
                         center = pts[0].mean(axis=0)
+
                         if mid in self.samples and mid not in self.fixed:
                             self.samples[mid].append(center.copy())
+
                             if len(self.samples[mid]) == 30:
                                 self.fixed[mid] = np.mean(self.samples[mid], axis=0)
                                 print(f'[Camera] Fixed marker {mid} locked')
+
+                                # Release the G-code thread only when all 3 are locked.
+                                if len(self.fixed) == 3:
+                                    self.markers_ready.set()
+                                    print('[Camera] All 3 fixed markers identified. Ready for motion.')
+
                         elif mid == 3:
                             moving_position = center.copy()
+
                 for mid, pos in self.fixed.items():
                     x, y = np.rint(pos).astype(int)
                     cv2.circle(display, (x, y), 6, (0, 255, 0), -1)
                     cv2.putText(display, f'ID {mid} FIXED', (x + 8, y - 8),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+
                 if moving_position is not None:
                     x, y = np.rint(moving_position).astype(int)
                     cv2.circle(display, (x, y), 6, (0, 0, 255), -1)
                     cv2.putText(display, f'ID 3 ({x}, {y})', (x + 8, y - 8),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
+
                 cv2.putText(display, f'Fixed: {len(self.fixed)}/3', (15, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
@@ -660,16 +658,17 @@ class CameraTracker(threading.Thread):
                     self.last_motion = now
 
                 if self.writer is None:
-                    # JPEG prebuffer avoids storing hundreds of full raw frames.
-                    success, encoded = cv2.imencode('.jpg', display,
-                                                    [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    success, encoded = cv2.imencode(
+                        '.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, 85]
+                    )
                     if success:
                         self.prebuffer.append((now, encoded.tobytes(), plot))
                     while self.prebuffer and now - self.prebuffer[0][0] > PRE_ROLL_SECONDS:
                         self.prebuffer.popleft()
-                    # Re-arm only after the marker has been stationary for 5 s.
+
                     if not moving and self.last_motion is not None and now - self.last_motion > POST_ROLL_SECONDS:
                         self.trigger_armed = True
+
                     if moving and self.trigger_armed:
                         self.start_recording(now)
                 else:
@@ -678,6 +677,7 @@ class CameraTracker(threading.Thread):
                         self.finish_recording()
 
         finally:
+            self.running = False
             self.finish_recording()
             cap.release()
 
@@ -720,13 +720,14 @@ def main():
         loadcell_ser = serial.Serial(loadcell_port, BAUD_RATE, timeout=0.1)
         time.sleep(2)
 
-        # 2. Perform 30-Second Baseline Zero Tare
-        live_drag_tare, live_lift_tare = measure_live_tare(loadcell_ser, sample_count=TARE_SAMPLE_COUNT)
+        # 2. Perform Baseline Zero Tare
+        live_drag_tare, live_lift_tare = measure_live_tare(
+            loadcell_ser, sample_count=TARE_SAMPLE_COUNT
+        )
 
-        # Align global time baseline
         shared_state["global_start_time"] = time.time()
 
-        # 3. Start Live Load Cell Reader Thread (Streaming Tared ADC Bits)
+        # 3. Start Load Cell Reader
         loadcell = LoadCellReader(
             loadcell_ser,
             drag_tare=live_drag_tare,
@@ -735,11 +736,11 @@ def main():
         )
         loadcell.start()
 
-        # 4. Camera tracking runs independently of Matplotlib.
+        # 4. Start Camera Tracking
         camera_tracker = CameraTracker()
         camera_tracker.start()
 
-        # 5. Connect Grbl Controller & Start Streaming + Polling Threads
+        # 5. Connect Grbl and Start Position Polling
         grbl = GrblController(grbl_port, BAUD_RATE)
         grbl.connect()
 
@@ -750,26 +751,44 @@ def main():
         )
         poller_thread.start()
 
-        # 6. Show camera next to the original four telemetry plots.
-        plt.style.use('seaborn-v0_8-darkgrid' if 'seaborn-v0_8-darkgrid' in plt.style.available else 'default')
+        # 6. Initialize Live Plots
+        plt.style.use(
+            'seaborn-v0_8-darkgrid'
+            if 'seaborn-v0_8-darkgrid' in plt.style.available
+            else 'default'
+        )
+
         fig = plt.figure(figsize=(16, 9), dpi=100)
-        gs = fig.add_gridspec(4, 2, width_ratios=[1.2, 1], hspace=0.38, wspace=0.23)
+        gs = fig.add_gridspec(
+            4, 2, width_ratios=[1.2, 1], hspace=0.38, wspace=0.23
+        )
+
         ax_cam = fig.add_subplot(gs[:, 0])
         ax_drag = fig.add_subplot(gs[0, 1])
         ax_lift = fig.add_subplot(gs[1, 1], sharex=ax_drag)
         ax_pos = fig.add_subplot(gs[2, 1], sharex=ax_drag)
         ax_vel = fig.add_subplot(gs[3, 1], sharex=ax_drag)
+
         fig.canvas.manager.set_window_title("Tow Tank Live Telemetry + Camera")
+
         blank = np.zeros((CAMERA_HEIGHT, CAMERA_WIDTH, 3), dtype=np.uint8)
         camera_image = ax_cam.imshow(blank)
         ax_cam.set_title("Camera + ArUco Tracking")
         ax_cam.axis("off")
 
-
-        line_drag, = ax_drag.plot([], [], color='#d62728', lw=1.8, label="Drag (Raw Bits Δ)")
-        line_lift, = ax_lift.plot([], [], color='#1f77b4', lw=1.8, label="Lift (Raw Bits Δ)")
-        line_pos, = ax_pos.plot([], [], color='#2ca02c', lw=1.8, label="Gantry Position (mm)")
-        line_vel, = ax_vel.plot([], [], color='#9467bd', lw=1.8, label="Signed Velocity (+Fwd / -Bwd)")
+        line_drag, = ax_drag.plot(
+            [], [], color='#d62728', lw=1.8, label="Drag (Raw Bits Δ)"
+        )
+        line_lift, = ax_lift.plot(
+            [], [], color='#1f77b4', lw=1.8, label="Lift (Raw Bits Δ)"
+        )
+        line_pos, = ax_pos.plot(
+            [], [], color='#2ca02c', lw=1.8, label="Gantry Position (mm)"
+        )
+        line_vel, = ax_vel.plot(
+            [], [], color='#9467bd', lw=1.8,
+            label="Signed Velocity (+Fwd / -Bwd)"
+        )
 
         ax_drag.set_ylabel("Drag (Bits Δ)")
         ax_drag.legend(loc="upper right")
@@ -785,7 +804,9 @@ def main():
 
         ax_vel.set_xlabel("Time (seconds)")
         ax_vel.set_ylabel("Velocity (mm/s)")
-        ax_vel.axhline(0, color='black', linestyle='--', linewidth=0.8, alpha=0.7)
+        ax_vel.axhline(
+            0, color='black', linestyle='--', linewidth=0.8, alpha=0.7
+        )
         ax_vel.legend(loc="upper right")
         ax_vel.grid(True)
 
@@ -793,6 +814,7 @@ def main():
             cam_frame, pos, cam_time = camera_tracker.snapshot()
             if cam_frame is not None:
                 camera_image.set_data(cam_frame)
+
             t, d, l = loadcell.get_plot_data()
             tm, p, v = motion_tracker.get_plot_data()
 
@@ -809,10 +831,8 @@ def main():
                     line_pos.set_data(t, [p[-1]] * len(t))
                     line_vel.set_data(t, [v[-1] if v else 0.0] * len(t))
 
-                # Auto-scroll X-axis window
                 ax_drag.set_xlim(t[0], max(t[-1], t[0] + 5))
 
-                # Auto-scale Y-axes dynamically with 5% margin
                 min_d, max_d = min(d), max(d)
                 margin_d = (max_d - min_d) * 0.05 or 10.0
                 ax_drag.set_ylim(min_d - margin_d, max_d + margin_d)
@@ -839,16 +859,38 @@ def main():
             if event.canvas is not fig.canvas:
                 return
             rgb = np.asarray(fig.canvas.buffer_rgba())[:, :, :3]
-            # Cache the plot column only. Camera thread records at capture speed.
-            camera_tracker.set_plot(rgb[:, int(rgb.shape[1] * 0.53):].copy())
+            camera_tracker.set_plot(
+                rgb[:, int(rgb.shape[1] * 0.53):].copy()
+            )
 
         fig.canvas.mpl_connect("draw_event", update_plot_snapshot)
-        ani = animation.FuncAnimation(fig, update_plot, interval=1000 // PREVIEW_FPS, blit=False,
-                                      cache_frame_data=False)
 
-        # Wait for the camera to warm up while Grbl connects, then launch motion.
-        gcode_thread = threading.Thread(target=grbl_worker, args=(grbl, commands), daemon=True)
+        ani = animation.FuncAnimation(
+            fig, update_plot,
+            interval=1000 // PREVIEW_FPS,
+            blit=False,
+            cache_frame_data=False
+        )
+
+        # 7. Wait for All 3 Fixed Markers Before Starting Motion
+        def start_motion_when_ready():
+            print('[Grbl] Waiting for fixed markers 0, 1, and 2...')
+
+            while camera_tracker.running and not shared_state["stop_polling"]:
+                if camera_tracker.markers_ready.wait(timeout=0.1):
+                    if not shared_state["stop_polling"] and camera_tracker.running:
+                        print('[Grbl] All 3 markers locked. Starting G-code motion.')
+                        grbl_worker(grbl, commands)
+                    return
+
+            print('[Grbl] Motion cancelled before marker initialization.')
+
+        gcode_thread = threading.Thread(
+            target=start_motion_when_ready,
+            daemon=True
+        )
         gcode_thread.start()
+
         plt.show()
 
     except KeyboardInterrupt:
@@ -857,6 +899,7 @@ def main():
         print(f"\n[Runtime Error] {e}")
     finally:
         shared_state["stop_polling"] = True
+
         if camera_tracker:
             camera_tracker.stop()
             camera_tracker.join(timeout=2)
@@ -864,8 +907,10 @@ def main():
         if grbl:
             grbl.emergency_stop()
             grbl.close()
+
         if loadcell:
             loadcell.stop()
+
         if loadcell_ser and loadcell_ser.is_open:
             loadcell_ser.close()
 
